@@ -1,90 +1,109 @@
 package main
 
 import (
-	"sync"
-	"os"
+	"github.com/gocolly/colly"
 	"log"
-	"net/http"
-	"fmt"
+	"sync"
 	"time"
 	"io/ioutil"
 	"path/filepath"
-	"flag"
 )
 
 const (
 	AIM = "ershoufang"
+	SLAVE_NUM = 10
 )
 
 var (
-	urlCh = make(chan string, 100)
+	urlStack = make([]string, 0)
+	urlStackM = &sync.Mutex{}
+	collector *colly.Collector
 	wg = &sync.WaitGroup{}
-	dir = "data"
-
-	start = flag.Int("start", -1, "start index")
-	slaveNum = flag.Int("slave", 100, "slave num")
 )
 
 func main() {
-	flag.Parse()
+	log.SetFlags(log.Lshortfile | log.LstdFlags)
 
-	if err := os.MkdirAll(dir, os.ModeDir); err != nil && !os.IsExist(err) {
-		log.Panic(err)
-	}
+	collector = colly.NewCollector(
+		colly.AllowedDomains("sh.lianjia.com"),
+	)
 
-	wg.Add(*slaveNum)
-	for i := 0; i < *slaveNum; i++ {
+	collector.UserAgent = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+
+	collector.OnError(func(r *colly.Response, err error) {
+		log.Println("[error]", r.Request.URL.String(), err)
+	})
+
+	collector.OnResponse(func(r *colly.Response) {
+		if March(r.Request.URL.Path) {
+			log.Println("find", r.Request.URL)
+		} else {
+			log.Println("visit", r.Request.URL)
+		}
+		if IsAim(r.Request.URL.Path) {
+			if err := ioutil.WriteFile("data/" + filepath.Base(r.Request.URL.Path), r.Body, 0666); err != nil {
+				log.Println("[error]", err)
+			}
+		}
+	})
+
+	collector.OnHTML("a[href]", func(e *colly.HTMLElement) {
+		link := e.Attr("href")
+		if March(link) {
+			addUrl(e.Request.AbsoluteURL(link))
+		}
+	})
+
+	go monitor()
+
+	addUrl("http://sh.lianjia.com/about/sitemap.html")
+	wg.Add(SLAVE_NUM)
+	for i := 0; i < SLAVE_NUM; i++{
 		go slave()
 	}
-
-	if *start == -1 {
-		flag.PrintDefaults()
-		return
-	}
-
-	for i := *start; i < 99999999; i++ {
-		if _, err :=  os.Stat(dir + "/sh%d.html"); os.IsNotExist(err) {
-			urlCh <- fmt.Sprintf("http://sh.lianjia.com/ershoufang/sh%d.html", i)
-		}
-	}
-
 	wg.Wait()
 }
 
 func slave() {
 	defer wg.Done()
-	client := &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	for v := range urlCh {
-		retry := false
-	RETRY:
-		if retry {
-			time.Sleep(time.Second)
-		}
-		retry = true
-		response, err := client.Get(v)
-		if err != nil {
-			log.Printf("get %v failed: %v\n", v, err)
-			goto RETRY
-		}
-
-		if response.StatusCode == 200 {
-			buffer, err := ioutil.ReadAll(response.Body)
-			if err != nil {
-				log.Printf("read body of %v failed: %v\n", v, err)
-				goto RETRY
-			}
-			err = ioutil.WriteFile(dir + "/" + filepath.Base(v), buffer, 0644)
-			if err != nil {
-				log.Printf("write body of %v failed: %v\n", v, err)
-				goto RETRY
+	emptyCount := 0
+	for true {
+		url := getUrl()
+		if url == "" {
+			if emptyCount >= 60 {
+				return
+			} else {
+				emptyCount++
+				time.Sleep(time.Second)
+				continue
 			}
 		}
-		log.Printf("ok get %v of %v\n", response.StatusCode, v)
-
-		response.Body.Close()
+		collector.Visit(url)
 	}
 }
+
+func getUrl() string {
+	urlStackM.Lock()
+	defer urlStackM.Unlock()
+	if len(urlStack) == 0 {
+		return ""
+	}
+	url := urlStack[len(urlStack) - 1]
+	urlStack = urlStack[:len(urlStack) - 1]
+	return url
+}
+
+func addUrl(url string) {
+	urlStackM.Lock()
+	defer urlStackM.Unlock()
+	urlStack = append(urlStack, url)
+}
+
+func monitor() {
+	for true {
+		log.Printf("url stack: len %v, cap %v", len(urlStack), cap(urlStack))
+		time.Sleep(10 * time.Second)
+	}
+}
+
+
