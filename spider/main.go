@@ -1,109 +1,55 @@
 package main
 
 import (
-	"github.com/gocolly/colly"
+	"fmt"
+	"strings"
 	"log"
-	"sync"
-	"time"
-	"io/ioutil"
-	"path/filepath"
-)
-
-const (
-	AIM = "ershoufang"
-	SLAVE_NUM = 10
-)
-
-var (
-	urlStack = make([]string, 0)
-	urlStackM = &sync.Mutex{}
-	collector *colly.Collector
-	wg = &sync.WaitGroup{}
 )
 
 func main() {
 	log.SetFlags(log.Lshortfile | log.LstdFlags)
-
-	collector = colly.NewCollector(
-		colly.AllowedDomains("sh.lianjia.com"),
-	)
-
-	collector.UserAgent = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
-
-	collector.OnError(func(r *colly.Response, err error) {
-		log.Println("[error]", r.Request.URL.String(), err)
-	})
-
-	collector.OnResponse(func(r *colly.Response) {
-		if March(r.Request.URL.Path) {
-			log.Println("find", r.Request.URL)
-		} else {
-			log.Println("visit", r.Request.URL)
-		}
-		if IsAim(r.Request.URL.Path) {
-			if err := ioutil.WriteFile("data/" + filepath.Base(r.Request.URL.Path), r.Body, 0666); err != nil {
-				log.Println("[error]", err)
-			}
-		}
-	})
-
-	collector.OnHTML("a[href]", func(e *colly.HTMLElement) {
-		link := e.Attr("href")
-		if March(link) {
-			addUrl(e.Request.AbsoluteURL(link))
-		}
-	})
-
-	go monitor()
-
-	addUrl("http://sh.lianjia.com/about/sitemap.html")
-	wg.Add(SLAVE_NUM)
-	for i := 0; i < SLAVE_NUM; i++{
-		go slave()
+	url := "https://sh.focus.cn/loupan/j100-300_w0_p%index%/?priceStatus=2&saleStatus=6"
+	count, err := GetLoupanCount(index(url, 1))
+	if err != nil {
+		log.Fatal(err)
 	}
-	wg.Wait()
-}
-
-func slave() {
-	defer wg.Done()
-	emptyCount := 0
-	for true {
-		url := getUrl()
-		if url == "" {
-			if emptyCount >= 60 {
-				return
-			} else {
-				emptyCount++
-				time.Sleep(time.Second)
-				continue
-			}
+	links := make([]string, 0)
+	i := 1
+	ls, err := GetLoupanLinks(index(url, i))
+	for err != ErrNotFound {
+		log.Println("visit", index(url, i))
+		if err == ErrNotFound {
+			break
 		}
-		collector.Visit(url)
+		if err != nil {
+			log.Println(index(url, i), err)
+		}
+		links = append(links, ls...)
+		i++
+		ls, err = GetLoupanLinks(index(url, i))
 	}
-}
 
-func getUrl() string {
-	urlStackM.Lock()
-	defer urlStackM.Unlock()
-	if len(urlStack) == 0 {
-		return ""
+	if len(links) != count {
+		log.Fatalf("get wrong number of links, got %v, expert %v\n", len(links), count)
 	}
-	url := urlStack[len(urlStack) - 1]
-	urlStack = urlStack[:len(urlStack) - 1]
-	return url
-}
 
-func addUrl(url string) {
-	urlStackM.Lock()
-	defer urlStackM.Unlock()
-	urlStack = append(urlStack, url)
-}
-
-func monitor() {
-	for true {
-		log.Printf("url stack: len %v, cap %v", len(urlStack), cap(urlStack))
-		time.Sleep(10 * time.Second)
+	infos := make([]*LoupanInfo, 0)
+	for _, v := range links {
+		log.Println("visit", v)
+		info, err := GetLoupanInfo(v)
+		if err != nil {
+			log.Println(v, err)
+			continue
+		}
+		infos = append(infos, info)
 	}
+
+	for _, v := range infos {
+		fmt.Println(v)
+	}
+
 }
 
-
+func index(url string, i int) string {
+	return strings.Replace(url, "%index%", fmt.Sprintf("%v", i), 1)
+}
