@@ -13,5 +13,10 @@ func main() {
 			"key": "d5c59bd4a0caf3f9de7372cf2f3d7bb2",
 		})
 	})
+	router.GET("/test", func(c *gin.Context) {
+		c.HTML(http.StatusOK, "test.tmpl", gin.H{
+			"key": "d5c59bd4a0caf3f9de7372cf2f3d7bb2",
+		})
+	})
 	router.Run(":80")
 }
