@@ -1,0 +1,16 @@
+var map = new AMap.Map("container", {
+    resizeEnable: true,
+    mapStyle: "amap://styles/dark"
+});
+
+var heatmapData = [
+{{range $i, $v := .heatList}}
+    {"lat":{{$v.lat}}, "lng":{{$v.lng}}, "count": {{$v.count}}},
+{{end}}
+];
+
+markerList = [
+{{range $i, $v := .markerList}}
+    new AMap.Marker({map: map, visible: false, label:{content:'<a onclick="openWindow(\'{{$v.url}}\')">{{$v.name}}<\a>'}, position: [{{$v.lng}},{{$v.lat}}]}),
+{{end}}
+];
